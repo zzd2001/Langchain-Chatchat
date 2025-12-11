@@ -805,9 +805,14 @@ def run_in_thread_pool(
 
         for obj in as_completed(tasks):
             try:
-                yield obj.result()
+                result = obj.result()
+                yield result
             except Exception as e:
-                logger.exception(f"error in sub thread: {e}")
+                # 记录完整的异常信息，包括类型和消息
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                logger.exception(f"error in sub thread: {error_msg}")
+                # 重新抛出异常，让调用者（如 files2docs_in_thread_file2docs）处理
+                raise
 
 
 def run_in_process_pool(

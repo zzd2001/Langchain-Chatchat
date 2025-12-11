@@ -435,6 +435,8 @@ def files2docs_in_thread(
     kwargs_list = []
     for i, file in enumerate(files):
         kwargs = {}
+        filename = None
+        kb_name = None
         try:
             if isinstance(file, tuple) and len(file) >= 2:
                 filename = file[0]
@@ -445,12 +447,20 @@ def files2docs_in_thread(
                 kb_name = file.pop("kb_name")
                 kwargs.update(file)
                 file = KnowledgeFile(filename=filename, knowledge_base_name=kb_name)
+            elif isinstance(file, KnowledgeFile):
+                filename = file.filename
+                kb_name = file.kb_name
+            else:
+                raise ValueError(f"不支持的文件类型: {type(file)}")
             kwargs["file"] = file
             kwargs["chunk_size"] = chunk_size
             kwargs["chunk_overlap"] = chunk_overlap
             kwargs["zh_title_enhance"] = zh_title_enhance
             kwargs_list.append(kwargs)
         except Exception as e:
+            # 确保 filename 和 kb_name 有值
+            filename = filename or getattr(file, 'filename', 'unknown')
+            kb_name = kb_name or getattr(file, 'kb_name', 'unknown')
             yield False, (kb_name, filename, str(e))
 
     for result in run_in_thread_pool(

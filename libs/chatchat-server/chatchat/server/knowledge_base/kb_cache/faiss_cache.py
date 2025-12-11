@@ -1,4 +1,5 @@
 import os
+import shutil
 
 from langchain.docstore.in_memory import InMemoryDocstore
 from langchain.schema import Document
@@ -34,8 +35,22 @@ class ThreadSafeFaiss(ThreadSafeObject):
 
     def save(self, path: str, create_path: bool = True):
         with self.acquire():
-            if not os.path.isdir(path) and create_path:
-                os.makedirs(path, exist_ok=True)
+            # 确保路径是绝对路径
+            path = os.path.abspath(path)
+            if create_path:
+                # 确保目录存在，无论它是否已经存在
+                if not os.path.exists(path):
+                    os.makedirs(path, exist_ok=True)
+                elif not os.path.isdir(path):
+                    # 如果路径存在但不是目录，尝试删除后创建
+                    try:
+                        os.remove(path)
+                        os.makedirs(path, exist_ok=True)
+                    except Exception:
+                        os.makedirs(path, exist_ok=True)
+            # 在保存前再次验证目录存在
+            if not os.path.isdir(path):
+                raise RuntimeError(f"无法创建或访问目录: {path}")
             ret = self._obj.save_local(path)
             logger.info(f"已将向量库 {self.key} 保存到磁盘")
         return ret
@@ -110,25 +125,118 @@ class KBFaissPool(_FaissPool):
                         f"loading vector store in '{kb_name}/vector_store/{vector_name}' from disk."
                     )
                     vs_path = get_vs_path(kb_name, vector_name)
-
-                    if os.path.isfile(os.path.join(vs_path, "index.faiss")):
-                        # 确保目录存在，即使文件存在
-                        if not os.path.exists(vs_path):
+                    # 确保路径是绝对路径
+                    vs_path = os.path.abspath(vs_path)
+                    
+                    # 确保目录存在，无论文件是否存在
+                    # FAISS 在加载和保存时都可能需要写入文件
+                    if not os.path.exists(vs_path):
+                        os.makedirs(vs_path, exist_ok=True)
+                    elif not os.path.isdir(vs_path):
+                        # 如果路径存在但不是目录，尝试删除后创建
+                        try:
+                            os.remove(vs_path)
                             os.makedirs(vs_path, exist_ok=True)
-                        embeddings = get_Embeddings(embed_model=embed_model)
-                        vector_store = FAISS.load_local(
-                            vs_path,
-                            embeddings,
-                            normalize_L2=True,
-                            allow_dangerous_deserialization=True,
-                        )
+                        except Exception:
+                            os.makedirs(vs_path, exist_ok=True)
+
+                    # 检查 FAISS 向量库文件是否完整
+                    index_faiss_path = os.path.join(vs_path, "index.faiss")
+                    index_pkl_path = os.path.join(vs_path, "index.pkl")
+                    has_faiss_file = os.path.isfile(index_faiss_path)
+                    has_pkl_file = os.path.isfile(index_pkl_path)
+                    
+                    if has_faiss_file:
+                        # 如果只有 index.faiss 而没有 index.pkl，文件不完整，需要重新创建
+                        if not has_pkl_file:
+                            logger.warning(
+                                f"向量库 {kb_name} 文件不完整（缺少 index.pkl），将删除并重新创建"
+                            )
+                            try:
+                                shutil.rmtree(vs_path)
+                                os.makedirs(vs_path, exist_ok=True)
+                            except Exception as cleanup_error:
+                                logger.error(f"清理不完整的向量库文件失败: {cleanup_error}")
+                            # 重新创建空的向量库
+                            vector_store = self.new_vector_store(
+                                kb_name=kb_name, embed_model=embed_model
+                            )
+                            vector_store.save_local(vs_path)
+                        else:
+                            # 文件完整，尝试加载
+                            try:
+                                embeddings = get_Embeddings(embed_model=embed_model)
+                            except Exception as embed_error:
+                                logger.error(f"创建嵌入模型失败: {embed_error}")
+                                # 如果无法创建嵌入模型，删除向量库文件并重新创建
+                                try:
+                                    shutil.rmtree(vs_path)
+                                    os.makedirs(vs_path, exist_ok=True)
+                                except Exception as cleanup_error:
+                                    logger.error(f"清理向量库文件失败: {cleanup_error}")
+                                # 重新创建空的向量库
+                                vector_store = self.new_vector_store(
+                                    kb_name=kb_name, embed_model=embed_model
+                                )
+                                vector_store.save_local(vs_path)
+                            else:
+                                try:
+                                    vector_store = FAISS.load_local(
+                                        vs_path,
+                                        embeddings,
+                                        normalize_L2=True,
+                                        allow_dangerous_deserialization=True,
+                                    )
+                                except (IndexError, ValueError, KeyError, AttributeError) as load_error:
+                                    # 如果加载失败（包括 list index out of range），可能是向量库文件损坏，尝试删除并重新创建
+                                    logger.warning(
+                                        f"加载向量库 {kb_name} 失败 ({type(load_error).__name__}): {load_error}，尝试删除损坏的文件并重新创建"
+                                    )
+                                    try:
+                                        shutil.rmtree(vs_path)
+                                        os.makedirs(vs_path, exist_ok=True)
+                                    except Exception as cleanup_error:
+                                        logger.error(f"清理损坏的向量库文件失败: {cleanup_error}")
+                                    # 重新创建空的向量库
+                                    vector_store = self.new_vector_store(
+                                        kb_name=kb_name, embed_model=embed_model
+                                    )
+                                    vector_store.save_local(vs_path)
+                                except Exception as load_error:
+                                    # 其他类型的错误
+                                    logger.warning(
+                                        f"加载向量库 {kb_name} 失败: {load_error}，尝试删除损坏的文件并重新创建"
+                                    )
+                                    try:
+                                        shutil.rmtree(vs_path)
+                                        os.makedirs(vs_path, exist_ok=True)
+                                    except Exception as cleanup_error:
+                                        logger.error(f"清理损坏的向量库文件失败: {cleanup_error}")
+                                    # 重新创建空的向量库
+                                    vector_store = self.new_vector_store(
+                                        kb_name=kb_name, embed_model=embed_model
+                                    )
+                                    vector_store.save_local(vs_path)
                     elif create:
                         # create an empty vector store
+                        # 再次确保目录存在（vs_path 已经是绝对路径）
                         if not os.path.exists(vs_path):
                             os.makedirs(vs_path, exist_ok=True)
+                        elif not os.path.isdir(vs_path):
+                            try:
+                                os.remove(vs_path)
+                                os.makedirs(vs_path, exist_ok=True)
+                            except Exception:
+                                os.makedirs(vs_path, exist_ok=True)
                         vector_store = self.new_vector_store(
                             kb_name=kb_name, embed_model=embed_model
                         )
+                        # 在保存前再次确保目录存在且可写
+                        if not os.path.exists(vs_path):
+                            os.makedirs(vs_path, exist_ok=True)
+                        # 验证目录确实存在
+                        if not os.path.isdir(vs_path):
+                            raise RuntimeError(f"无法创建目录: {vs_path}")
                         vector_store.save_local(vs_path)
                     else:
                         raise RuntimeError(f"knowledge base {kb_name} not exist.")

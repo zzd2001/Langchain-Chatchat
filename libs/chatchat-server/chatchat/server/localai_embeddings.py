@@ -88,7 +88,22 @@ def _async_retry_decorator(embeddings: LocalAIEmbeddings) -> Any:
 
 
 # https://stackoverflow.com/questions/76469415/getting-embeddings-of-length-1-from-langchain-openaiembeddings
-def _check_response(response: dict) -> dict:
+def _check_response(response: Any) -> Any:
+    # 检查 response 是否是字符串（错误消息）
+    if isinstance(response, str):
+        import openai
+        raise openai.APIError(f"API returned error string: {response}")
+    
+    # 检查 response 是否有 data 属性
+    if not hasattr(response, 'data'):
+        import openai
+        raise openai.APIError(f"Invalid response format: {type(response)}, missing 'data' attribute")
+    
+    # 检查 data 是否存在且不为空
+    if not response.data or len(response.data) == 0:
+        import openai
+        raise openai.APIError("LocalAI API returned empty data")
+    
     if any([len(d.embedding) == 1 for d in response.data]):
         import openai
 
@@ -102,8 +117,64 @@ def embed_with_retry(embeddings: LocalAIEmbeddings, **kwargs: Any) -> Any:
 
     @retry_decorator
     def _embed_with_retry(**kwargs: Any) -> Any:
-        response = embeddings.client.create(**kwargs)
-        return _check_response(response)
+        import openai
+        try:
+            response = embeddings.client.create(**kwargs)
+            
+            # 首先检查 response 是否是字符串（错误消息）
+            if isinstance(response, str):
+                raise openai.APIError(f"API returned error string: {response}")
+            
+            # 检查 response 是否是 None
+            if response is None:
+                raise openai.APIError("API returned None response")
+            
+            # 检查 response 是否有 data 属性
+            if not hasattr(response, 'data'):
+                # 尝试将 response 转换为字符串以便调试
+                response_str = str(response) if response else "None"
+                raise openai.APIError(
+                    f"Invalid API response format: {type(response)}, "
+                    f"missing 'data' attribute. Response: {response_str[:200]}"
+                )
+            
+            # 调用 _check_response 进行进一步验证
+            try:
+                return _check_response(response)
+            except AttributeError as e:
+                # 如果 _check_response 中访问 data 属性失败，提供更详细的错误信息
+                if "'str' object has no attribute" in str(e) or "'NoneType' object has no attribute" in str(e):
+                    response_str = str(response) if response else "None"
+                    raise openai.APIError(
+                        f"Invalid API response format: {type(response)}. "
+                        f"Response content: {response_str[:200]}. "
+                        f"Original error: {e}"
+                    )
+                raise
+        except openai.APIError:
+            # 重新抛出 APIError
+            raise
+        except AttributeError as e:
+            # 捕获属性访问错误
+            if "'str' object has no attribute" in str(e):
+                import openai
+                raise openai.APIError(
+                    f"API returned invalid response format (string instead of object): {e}"
+                )
+            raise
+        except Exception as e:
+            # 其他所有异常
+            import openai
+            error_type = type(e).__name__
+            error_msg = str(e)
+            # 如果是字符串响应导致的错误，提供更清晰的错误信息
+            if "'str' object has no attribute" in error_msg:
+                raise openai.APIError(
+                    f"Invalid API response format: API returned string instead of object. "
+                    f"Error: {error_type}: {error_msg}"
+                )
+            # 重新抛出原始异常，让 retry 机制处理
+            raise
 
     return _embed_with_retry(**kwargs)
 
@@ -113,8 +184,64 @@ async def async_embed_with_retry(embeddings: LocalAIEmbeddings, **kwargs: Any) -
 
     @_async_retry_decorator(embeddings)
     async def _async_embed_with_retry(**kwargs: Any) -> Any:
-        response = await embeddings.async_client.create(**kwargs)
-        return _check_response(response)
+        import openai
+        try:
+            response = await embeddings.async_client.create(**kwargs)
+            
+            # 首先检查 response 是否是字符串（错误消息）
+            if isinstance(response, str):
+                raise openai.APIError(f"API returned error string: {response}")
+            
+            # 检查 response 是否是 None
+            if response is None:
+                raise openai.APIError("API returned None response")
+            
+            # 检查 response 是否有 data 属性
+            if not hasattr(response, 'data'):
+                # 尝试将 response 转换为字符串以便调试
+                response_str = str(response) if response else "None"
+                raise openai.APIError(
+                    f"Invalid API response format: {type(response)}, "
+                    f"missing 'data' attribute. Response: {response_str[:200]}"
+                )
+            
+            # 调用 _check_response 进行进一步验证
+            try:
+                return _check_response(response)
+            except AttributeError as e:
+                # 如果 _check_response 中访问 data 属性失败，提供更详细的错误信息
+                if "'str' object has no attribute" in str(e) or "'NoneType' object has no attribute" in str(e):
+                    response_str = str(response) if response else "None"
+                    raise openai.APIError(
+                        f"Invalid API response format: {type(response)}. "
+                        f"Response content: {response_str[:200]}. "
+                        f"Original error: {e}"
+                    )
+                raise
+        except openai.APIError:
+            # 重新抛出 APIError
+            raise
+        except AttributeError as e:
+            # 捕获属性访问错误
+            if "'str' object has no attribute" in str(e):
+                import openai
+                raise openai.APIError(
+                    f"API returned invalid response format (string instead of object): {e}"
+                )
+            raise
+        except Exception as e:
+            # 其他所有异常
+            import openai
+            error_type = type(e).__name__
+            error_msg = str(e)
+            # 如果是字符串响应导致的错误，提供更清晰的错误信息
+            if "'str' object has no attribute" in error_msg:
+                raise openai.APIError(
+                    f"Invalid API response format: API returned string instead of object. "
+                    f"Error: {error_type}: {error_msg}"
+                )
+            # 重新抛出原始异常，让 retry 机制处理
+            raise
 
     return await _async_embed_with_retry(**kwargs)
 
@@ -284,15 +411,16 @@ class LocalAIEmbeddings(BaseModel, Embeddings):
             # See: https://github.com/openai/openai-python/issues/418#issuecomment-1525939500
             # replace newlines, which can negatively affect performance.
             text = text.replace("\n", " ")
-        return (
-            embed_with_retry(
-                self,
-                input=[text],
-                **self._invocation_params,
-            )
-            .data[0]
-            .embedding
+        response = embed_with_retry(
+            self,
+            input=[text],
+            **self._invocation_params,
         )
+        # 检查响应是否有效
+        if not hasattr(response, 'data') or not response.data or len(response.data) == 0:
+            import openai
+            raise openai.APIError(f"Invalid embedding response: {response}")
+        return response.data[0].embedding
 
     async def _aembedding_func(self, text: str, *, engine: str) -> List[float]:
         """Call out to LocalAI's embedding endpoint."""
@@ -301,17 +429,16 @@ class LocalAIEmbeddings(BaseModel, Embeddings):
             # See: https://github.com/openai/openai-python/issues/418#issuecomment-1525939500
             # replace newlines, which can negatively affect performance.
             text = text.replace("\n", " ")
-        return (
-            (
-                await async_embed_with_retry(
-                    self,
-                    input=[text],
-                    **self._invocation_params,
-                )
-            )
-            .data[0]
-            .embedding
+        response = await async_embed_with_retry(
+            self,
+            input=[text],
+            **self._invocation_params,
         )
+        # 检查响应是否有效
+        if not hasattr(response, 'data') or not response.data or len(response.data) == 0:
+            import openai
+            raise openai.APIError(f"Invalid embedding response: {response}")
+        return response.data[0].embedding
 
     def embed_documents(
         self, texts: List[str], chunk_size: Optional[int] = 0
