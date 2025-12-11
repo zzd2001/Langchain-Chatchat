@@ -35,7 +35,7 @@ class ThreadSafeFaiss(ThreadSafeObject):
     def save(self, path: str, create_path: bool = True):
         with self.acquire():
             if not os.path.isdir(path) and create_path:
-                os.makedirs(path)
+                os.makedirs(path, exist_ok=True)
             ret = self._obj.save_local(path)
             logger.info(f"已将向量库 {self.key} 保存到磁盘")
         return ret
@@ -112,6 +112,9 @@ class KBFaissPool(_FaissPool):
                     vs_path = get_vs_path(kb_name, vector_name)
 
                     if os.path.isfile(os.path.join(vs_path, "index.faiss")):
+                        # 确保目录存在，即使文件存在
+                        if not os.path.exists(vs_path):
+                            os.makedirs(vs_path, exist_ok=True)
                         embeddings = get_Embeddings(embed_model=embed_model)
                         vector_store = FAISS.load_local(
                             vs_path,
@@ -122,7 +125,7 @@ class KBFaissPool(_FaissPool):
                     elif create:
                         # create an empty vector store
                         if not os.path.exists(vs_path):
-                            os.makedirs(vs_path)
+                            os.makedirs(vs_path, exist_ok=True)
                         vector_store = self.new_vector_store(
                             kb_name=kb_name, embed_model=embed_model
                         )
